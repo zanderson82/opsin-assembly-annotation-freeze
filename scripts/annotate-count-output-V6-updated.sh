@@ -14,10 +14,9 @@ OPSIN_REFERENCE=$3      # OPSIN reference sequences
 OUTPUT_DIR=$4           # Output directory
 DESCRIPTION=$5          # Description for this analysis run
 BAM_DIR=$6              # Directory containing BAM files (optional)
-REFERENCE_GENOME=$7     # Reference genome (optional)
 
 # Scripts directory (adjust path as needed)
-SCRIPTS_DIR="/n/zanderson/OPSIN-carrier-screen/manual-assembly-and-annotate/scripts"
+SCRIPTS_DIR="./scripts"
 ANALYSIS_SCRIPT="${SCRIPTS_DIR}/python_opsin_processing_V6.py"
 STATS_SCRIPT="${SCRIPTS_DIR}/bed-file-contig-alignment-stats.sh"
 GFF_TO_BED_SCRIPT="${SCRIPTS_DIR}/gff_to_bed2.py"
@@ -34,7 +33,7 @@ if [ -z "$METADATA_TABLE" ] || [ -z "$ASSEMBLIES_DIR" ] || [ -z "$OPSIN_REFERENC
     echo ""
     echo "Metadata table format: SampleID<tab>Sex (XX or XY)"
     echo ""
-    echo "Optional: bam_directory - location of BAM files for alignment stats"
+    echo "bam_directory - location of BAM files for alignment stats"
     exit 1
 fi
 

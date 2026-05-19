@@ -28,6 +28,8 @@ if [ $# -lt 3 ]; then
     echo "                         Example: '--samtools-flag \"-F 0x900\"'"
     echo "  --use-subdirs          Look for BAM files in FIRST_100 and 100_PLUS subdirectories"
     echo "                         Default: false (look directly in bam_dir)"
+    echo "  --input-suffix <suffix> Default: .phased.bam"
+    echo "                         Example: '--input-suffix .fastq'"
     exit 1
 fi
 
@@ -35,7 +37,7 @@ samples_file="$1"
 region="$2"
 region_name="$3"
 bam_dir="$4"
-HIFIASM="/n/zanderson/OPSIN-carrier-screen/manual-assembly-and-annotate/hifiasm/hifiasm"
+HIFIASM="../hifiasm/hifiasm"
 
 # Default to NOT using --hg-size
 use_size=false
@@ -43,7 +45,8 @@ use_size=false
 output_base_dir="$(pwd)"
 # Default to NOT using subdirectories
 use_subdirs=false
-
+# Default input suffix is .phased.bam
+input_suffix=".phased.bam"
 # Check for optional flags in arguments
 shift 3  # Skip the first three required arguments
 while [ $# -gt 0 ]; do
@@ -91,6 +94,13 @@ while [ $# -gt 0 ]; do
             use_subdirs=true
             echo "Will look for BAM files in FIRST_100 and 100_PLUS subdirectories"
             shift 1
+            ;;
+        --input-suffix)
+            if [ -n "$2" ]; then
+                input_suffix="$2"
+                echo "Will use $input_suffix as the input suffix"
+                shift 2
+            fi
             ;;
         *)
             echo "Unknown parameter: $1"
@@ -219,52 +229,61 @@ for i in "${!sample_ids[@]}"; do
         fi
         
         # Find the BAM files in the specific directories
-        #bam_files=$(find "$search_path" -name "*${sample}*.phased.bam" 2>/dev/null)
-        bam_files=$(find "$search_path" -name "*${sample}*phased.bam" 2>/dev/null)
-        if [ -z "$bam_files" ]; then
+        #candidate files based on provided suffix
+        input_files=$(find "$search_path" -name "*${sample}*${input_suffix}" 2>/dev/null)
+        if [ -z "$input_files" ]; then
             if [ "$use_subdirs" = true ]; then
-                echo "  No BAM files found for $sample in $dir" | tee -a "$log_file"
+                echo "  No input files (suffix: $input_suffix) found for $sample in $dir" | tee -a "$log_file"
             else
-                echo "  No BAM files found for $sample in $bam_dir" | tee -a "$log_file"
+                echo "  No input files (suffix: $input_suffix) found for $sample in $bam_dir" | tee -a "$log_file"
             fi
             continue
         fi
         
         if [ "$use_subdirs" = true ]; then
-            echo "  Found $(echo "$bam_files" | wc -l) BAM files for $sample in $dir" | tee -a "$log_file"
+            echo "  Found $(echo "$input_files" | wc -l) input files (suffix: $input_suffix) for $sample in $dir" | tee -a "$log_file"
         else
-            echo "  Found $(echo "$bam_files" | wc -l) BAM files for $sample" | tee -a "$log_file"
+            echo "  Found $(echo "$input_files" | wc -l) input files (suffix: $input_suffix) for $sample" | tee -a "$log_file"
         fi
         
-        for bam_file in $bam_files; do
+        for input_file in $input_files; do
             # Extract sample name from BAM filename
-            #filename=$(basename "$bam_file" .phased.bam)
-            filename=$(basename "$bam_file" .phased.bam)
+            #filename=$(basename "$input_file" .phased.bam)
+            filename=$(basename "$input_file" "$input_suffix")
+            # Normalize: strip any trailing dot (can occur if input_suffix lacks leading '.')
+            filename="${filename%.}"
             output_dir="${output_base_dir}/${filename}_${sex}_hifiasm_outputs"
             mkdir -p "$output_dir"
             
-            echo "  Extracting reads from $bam_file for region $region" | tee -a "$log_file"
-            # First extract the reads to a temporary BAM file
-            if samtools view -@ 15 -b "$samtools_flag" "$bam_file" "$region" > "${output_dir}/${filename}.${sex}.${region_name}.temp.bam"; then
-                # Check if the extracted BAM has reads
+            # Determine reads FASTQ depending on input type
+            reads_fastq="${output_dir}/${filename}.${sex}.${region_name}.fastq"
+            if [ "$input_suffix" = ".fastq" ]; then
+                echo "  Using existing FASTQ input: $input_file" | tee -a "$log_file"
+                # Create a symlink with the expected name for downstream steps if it doesn't exist
+                if [ ! -e "$reads_fastq" ]; then
+                    ln -s "$input_file" "$reads_fastq"
+                fi
+            else
+                echo "  Extracting reads from the bam file: $input_file for region $region" | tee -a "$log_file"
+                if ! samtools view -@ 15 -b "$samtools_flag" "$input_file" "$region" > "${output_dir}/${filename}.${sex}.${region_name}.temp.bam"; then
+                    echo "  ERROR: Failed to extract reads from $input_file" | tee -a "$log_file"
+                    continue
+                fi
                 read_count=$(samtools view -c "${output_dir}/${filename}.${sex}.${region_name}.temp.bam")
                 if [ "$read_count" -eq 0 ]; then
                     echo "  WARNING: No reads found in region $region for $filename" | tee -a "$log_file"
                     rm "${output_dir}/${filename}.${sex}.${region_name}.temp.bam"
                     continue
                 fi
-                
-                # Then convert to FASTQ
-                echo "  Converting to FASTQ" | tee -a "$log_file"
-                if ! samtools fastq "${output_dir}/${filename}.${sex}.${region_name}.temp.bam" > "${output_dir}/${filename}.${sex}.${region_name}.fastq"; then
+                echo "  Converting extracted reads to FASTQ" | tee -a "$log_file"
+                if ! samtools fastq "${output_dir}/${filename}.${sex}.${region_name}.temp.bam" > "$reads_fastq"; then
                     echo "  ERROR: Failed to convert BAM to FASTQ for $filename" | tee -a "$log_file"
                     rm "${output_dir}/${filename}.${sex}.${region_name}.temp.bam"
                     continue
                 fi
-                
-                # Remove the temporary file
                 rm "${output_dir}/${filename}.${sex}.${region_name}.temp.bam"
-                
+            fi
+
                 # Save current directory before changing to output_dir
                 current_dir=$(pwd)
                 cd "$output_dir" || { 
@@ -274,9 +293,11 @@ for i in "${!sample_ids[@]}"; do
                 
                 # Run hifiasm assembly with appropriate options based on sex
                 echo "  Running hifiasm assembly for ${filename} (${sex})" | tee -a "$log_file"
-                echo "  Command: $HIFIASM -o ${filename}.${sex}.${region_name}.asm $hifiasm_opts ${filename}.${sex}.${region_name}.fastq" | tee -a "$log_file"
+                # Use basename here since we're already inside output_dir
+                reads_fastq_basename=$(basename "$reads_fastq")
+                echo "  Command: $HIFIASM -o ${filename}.${sex}.${region_name}.asm $hifiasm_opts $reads_fastq_basename" | tee -a "$log_file"
                 
-                if ! $HIFIASM -o "${filename}.${sex}.${region_name}.asm" $hifiasm_opts "${filename}.${sex}.${region_name}.fastq" 2> "${filename}.${sex}.${region_name}.asm.log"; then
+                if ! $HIFIASM -o "${filename}.${sex}.${region_name}.asm" $hifiasm_opts "$reads_fastq_basename" 2> "${filename}.${sex}.${region_name}.asm.log"; then
                     echo "  WARNING: hifiasm may have encountered issues, check ${filename}.${sex}.${region_name}.asm.log" | tee -a "$log_file"
                     # Continue anyway as hifiasm might still produce usable output
                 fi
@@ -330,9 +351,7 @@ for i in "${!sample_ids[@]}"; do
                 fi
                 
                 cd "$current_dir" || echo "Failed to return to $current_dir"
-            else
-                echo "  ERROR: Failed to extract reads from $bam_file" | tee -a "$log_file"
-            fi
+            
         done
     done
     
