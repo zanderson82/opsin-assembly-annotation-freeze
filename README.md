@@ -10,6 +10,7 @@ Annotation
 * Exonerate https://github.com/nathanweeks/exonerate
 * Minimap2 https://github.com/lh3/minimap2
 * Samtools 1.23.1
+* Python 3.13.3
 
 ## Usage and Scripts
 All scripts needed are in ```./scripts```
